@@ -1,0 +1,154 @@
+---
+title: "Identification of Patients with Acute Lymphocytic Leukemia Based on their Genes"
+output: html_notebook
+---
+
+Load required R packages
+```{r}
+library("devtools")
+library("tidyverse")
+library("datamicroarray")
+library("caret")
+library("glmnet")
+library("ggplot2")
+library("e1071")
+library("pROC")
+library("MASS")
+
+```
+
+Exploratory Data Analysis
+```{r}
+#Step 1: 
+data('chiaretti', package = 'datamicroarray')
+
+#barplot showing number of patients with different types of ALL
+barplot(table(chiaretti$y),main="Leukemia Diagnosis of Patients",xlab = "Types",
+ylab="Number of Patients",col ="darkmagenta")
+#barplot showing number of patients with & without ALL
+barplot(table(ifelse(chiaretti$y == "NEG", 0, 1)),names.arg =c("Negative","Positive"),main="Leukemia Status of Patients",xlab = "Status",
+ylab="Number of Patients",col ="darkmagenta")
+
+```
+
+```{r}
+#histogram showing the distribution of some predictors
+hist(chiaretti$x[,1],main = colnames(chiaretti$x)[1],xlab = colnames(chiaretti$x)[1],col ="darkmagenta")
+hist(chiaretti$x[,2],main = colnames(chiaretti$x)[2],xlab = colnames(chiaretti$x)[2],col ="darkmagenta")
+hist(chiaretti$x[,3],main = colnames(chiaretti$x)[3],xlab = colnames(chiaretti$x)[3],col ="darkmagenta")
+hist(chiaretti$x[,4],main = colnames(chiaretti$x)[4],xlab = colnames(chiaretti$x)[4],col ="darkmagenta")
+hist(chiaretti$x[,5],main = colnames(chiaretti$x)[5],xlab = colnames(chiaretti$x)[5],col ="darkmagenta")
+hist(chiaretti$x[,6],main = colnames(chiaretti$x)[6],xlab = colnames(chiaretti$x)[6],col ="darkmagenta")
+hist(chiaretti$x[,7],main = colnames(chiaretti$x)[7],xlab = colnames(chiaretti$x)[7],col ="darkmagenta")
+hist(chiaretti$x[,8],main = colnames(chiaretti$x)[8],xlab = colnames(chiaretti$x)[8],col ="darkmagenta")
+hist(chiaretti$x[,9],main = colnames(chiaretti$x)[9],xlab = colnames(chiaretti$x)[9],col ="darkmagenta")
+hist(chiaretti$x[,10],main = colnames(chiaretti$x)[10],xlab = colnames(chiaretti$x)[10],col ="darkmagenta")
+hist(chiaretti$x[,11],main = colnames(chiaretti$x)[11],xlab = colnames(chiaretti$x)[11],col ="darkmagenta")
+hist(chiaretti$x[,12],main = colnames(chiaretti$x)[12],xlab = colnames(chiaretti$x)[12],col ="darkmagenta")
+```
+
+Data Preparation
+```{r}
+# Recode y variable into dummy variables 0 & 1
+chiaretti$y.recode <- ifelse(chiaretti$y == "NEG", 0, 1)
+#Split the data into training and test set
+set.seed(123)
+training.samples <- chiaretti$y.recode %>% createDataPartition(p = 0.8, list = FALSE)
+#create x and y training and test data
+x.train.data  <- chiaretti$x[training.samples, ]
+y.train.data <- chiaretti$y.recode[training.samples]
+x.test.data <- chiaretti$x[-training.samples, ]
+y.test.data <- chiaretti$y.recode[-training.samples]
+
+```
+
+LEAST ABSOLUTE SHRINKAGE AND SELECTION OPERATOR (LASSO) METHOD
+```{r}
+# Fit Lasso model on training data
+# Find the best lambda using cross-validation
+set.seed(222) 
+cv.lasso <- cv.glmnet(x.train.data, y.train.data, alpha = 1, family = "binomial")
+plot(cv.lasso)
+# Fit the final model on the training data
+lasso.classifier <- glmnet(x.train.data, y.train.data, alpha = 1, family = "binomial", lambda = cv.lasso$lambda.min)
+# Display regression coefficients
+lasso.coef <- coef(lasso.classifier)[,1]
+# non-zero lasso coefficient
+nonzero.lasso.coeff <- lasso.coef[lasso.coef != 0]
+#plot top 10 predictors
+lasso.top10 <- nonzero.lasso.coeff[order(-abs(nonzero.lasso.coeff))][2:11]
+lasso.top10.df <- data.frame(predictors=names(lasso.top10),coefficent = lasso.top10)
+ggplot(lasso.top10.df, aes(x = reorder(predictors,abs(coefficent)), coefficent)) +
+  geom_bar(stat = "identity",fill ="darkmagenta") + 
+  coord_flip() + 
+  labs(y = "Coefficient", x = "Predictors(Genes)" ) + 
+  ggtitle("Top 10 Genes that Influence the Possibility of having Leukemia")
+
+# Make predictions on the test data
+lasso.probabilities <- lasso.classifier %>% predict(newx = x.test.data)
+# Check model accuracy
+lasso.predicted.classes <- ifelse(lasso.probabilities > 0.5, 1, 0)
+# Model accuracy
+mean(lasso.predicted.classes == y.test.data)
+
+# Calculate the AUC & ROC
+auc(y.test.data, lasso.predicted.classes, plot=TRUE)
+```
+
+LINEAR DISCRIMINANT ANALYSIS (LDA) METHOD
+```{r}
+# Fit LDA model on training dataset
+lda.classifier = lda(y~., data = data.frame(y=y.train.data,x.train.data))
+
+#plot top 10 predictors
+lda.top10<- data.frame(predictors=substring(rownames(lda.classifier[["scaling"]]),2),coefficent = lda.classifier[["scaling"]])
+lda.top10.df <- head(lda.top10[order(-abs(lda.top10$LD1)),],10)
+ggplot(lda.top10.df, aes(x = reorder(predictors,abs(LD1)), LD1)) +
+  geom_bar(stat = "identity",fill ="darkmagenta") + 
+  coord_flip() + 
+  labs(y = "Coefficients of linear discriminants", x = "Predictors/Genes" ) + 
+  ggtitle("Top 10 Genes that Influence the Possibility of having Leukemia")
+
+# Make predictions on the test data
+lda.probabilities <- lda.classifier %>% predict(data.frame(x.test.data))
+# Check model accuracy 
+lda.predicted.classes <- as.numeric(levels(lda.probabilities$class))[lda.probabilities$class]
+# Model accuracy
+mean(lda.predicted.classes == y.test.data)
+
+# Calculate the AUC & ROC
+roc(y.test.data, lda.predicted.classes, plot=TRUE)
+
+```
+
+
+SUPPORT VECTOR MACHINE (SVM) METHOD
+```{r}
+# Fit SVM model on training dataset
+svm.classifier = svm(x = x.train.data, y = y.train.data,kernel = "linear")
+beta = drop(t(svm.classifier$coefs)%*%x.train.data[svm.classifier$index,])
+# plot top 10 predictors
+svm.top10 <- data.frame(predictors=names(beta),coefficent = beta)
+svm.top10.df <- head(svm.top10[order(-abs(svm.top10$coefficent)),],10)
+ggplot(svm.top10.df, aes(x = reorder(predictors,abs(coefficent)), coefficent)) +
+  geom_bar(stat = "identity",fill ="darkmagenta") + 
+  coord_flip() + 
+  labs(y = "Coefficients", x = "Predictors/Genes" ) + 
+  ggtitle("Top 10 Genes that Influence the Possibility of having Leukemia")
+
+# Make predictions on the test data
+svm.probabilities <- svm.classifier %>% predict(x.test.data)
+# Check model accuracy
+svm.predicted.classes <- ifelse(svm.probabilities > 0.5, 1, 0)
+# Model accuracy
+mean(svm.predicted.classes == y.test.data)
+
+# Calculate the AUC & ROC
+roc(y.test.data, svm.predicted.classes, plot=TRUE)
+
+```
+
+
+
+
+
